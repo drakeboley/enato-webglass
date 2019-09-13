@@ -190,8 +190,8 @@ function heartbeat() {
               }
           }
       });
-      console.log(height)
-      console.log(width)
+      height = height || 600
+      width = width || 800
       const viewPort= {width:Number(height), height:Number(width)};
       await page.setViewport(viewPort);
       page.screenshot({fullPage: true, encoding: 'base64'}).then( (data) => {
