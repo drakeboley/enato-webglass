@@ -82,7 +82,7 @@ const awsmobile = {
     complexObjectsCredentials: () => Auth.currentCredentials(),
     fetch: fetch
   });
-const browsers = []
+const browsers = {}
 function noop() {}
 
 function heartbeat() {
@@ -94,33 +94,13 @@ function heartbeat() {
     let message = JSON.parse(ms);
     let { uuid, height, width } = message;
     const sysId = uuid.split('|')[0]
-    const browserId = uuid.split('|')[1]  
-    debugger
-      if (message.type === "openUrl") {
-        const query = gql`
-        {
-            getInstance (id: "${sysId}") {
-                id
-                details
-                }
-        }`
-        client.query({ query: query })
-        .then((data) => {
-            if (data && data.data && data.data.getInstance) {
-                debugger
-                openPage(ws, data.data.getInstance.details, height, width)
-            }
-        })
-        .catch((err) => {
-            console.log(err)
-            connection.terminate()
-            clearInterval(interval)
-        });
-      }
-      else if (message.type === 'close') {
+    const browserId = uuid.split('|')[1]
+    const clip = message.clip ? message.clip : null
+      if (message.type === 'close' && browsers[browserId]) {
           browsers[browserId].browser.close()
           ws.send('closed');
           ws.terminate(); 
+          browsers[uuid] = null
       }
       else if (message.type === 'click' && browsers[browserId]) {
           sendClick(ws, browserId, message)
@@ -137,6 +117,27 @@ function heartbeat() {
       else if (message.type === 'forward' && browsers[browserId]) {
           sendForward(ws, browserId, message)
       }
+      else {
+        const query = gql`
+        {
+            getInstance (id: "${sysId}") {
+                id
+                details
+                }
+        }`
+        client.query({ query: query })
+        .then((data) => {
+            if (data && data.data && data.data.getInstance) {
+                openPage(ws, data.data.getInstance.details, browserId, height, width)
+            }
+        })
+        .catch((err) => {
+            console.log(err)
+            connection.terminate()
+            browsers[uuid] = null
+            clearInterval(interval)
+        });
+      }
   
     });
     ws.isAlive = true;
@@ -144,8 +145,8 @@ function heartbeat() {
     ws.send('connected');
   });
   
-  async function openPage(connection, url, uuid, height, width) {
-          console.log('openPage fired')
+  async function openPage(connection, url, uuid, height, width, clip = null) {
+          console.log('connecting to: ' + url)
           const browser = await puppeteer.launch({
             args: ['--disable-dev-shm-usage']
           }).catch((err) => {
@@ -174,27 +175,27 @@ function heartbeat() {
               mouse: page.mouse,
               itsOk: true
           };
-          sendNewImage(connection, uuid, height, width)
+          sendNewImage(connection, uuid, height, width, clip)
   }
   
-  async function sendNewImage (connection, uuid, height, width) {
-      debugger
+  async function sendNewImage (connection, uuid, height, width, clip = null) {
       const browser = browsers[uuid].browser;
       const page = browsers[uuid].page;
       //browsers[uuid].image2 = null;
       const outStream = new Writable({
           write(chunk, encoding, callback) {
-              console.log('data')
               if (connection.isAlive) {
                   connection.send(chunk)
               }
           }
       });
-      height = height || 600
-      width = width || 800
+      height = (height && height > 0) ? height : 800
+      width = (width && width > 0) ? width : 600
+      const options = clip ? {fullPage: false, encoding: 'base64', clip: clip
+        } : {fullPage: true, encoding: 'base64'}
       const viewPort= {width:Number(height), height:Number(width)};
       await page.setViewport(viewPort);
-      page.screenshot({fullPage: true, encoding: 'base64'}).then( (data) => {
+      page.screenshot(options).then( (data) => {
               
               if (data === cachedImage) {
                   return connection.send('same')
@@ -202,23 +203,23 @@ function heartbeat() {
               else {
                   cachedImage = data
               }
-          
               /*var rs = stream.readable(function(size) {
                   this.push(data);                
               });
               rs.pipe(gz).pipe(outStream);
               */
-              zlib.gzip(data, (err, response) => {
-                  connection.send(response)
-              });
           if (connection.isAlive) {
-              image2 = null      
+            zlib.gzip(data, (err, response) => {
+                connection.send(response)
+            });
               //sendNewImage(connection, uuid)
           } else
           { 
               browsers[uuid] = null
               connection.terminate()
           }
+      }).catch((err) => {
+          console.log(err)
       });
   
       
